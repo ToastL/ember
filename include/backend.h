@@ -3,19 +3,15 @@
 
 #include "ember.h"
 
-// Initialize the DRM/GBM/EGL stack
-int init_graphics(struct ember_server *server);
-
-// Initialize the DRM output (Modeset)
-int init_output(struct ember_server *server);
-
-// Render a single frame
-void render_frame(struct ember_server *server);
-
-// Handle DRM events (Page Flip completion)
+// drm.c
+int init_drm(struct ember_server *server);
 void handle_drm_event(struct ember_server *server);
+uint32_t get_fb_for_bo(int fd, struct gbm_bo *bo);
 
-// Upload client pixels to texture
-void update_surface_texture(struct ember_surface *surface, void *data, int width, int height, int stride, uint32_t format);
+// egl.c
+int init_egl(struct ember_server *server);
+
+// output.c
+int init_output(struct ember_server *server);
 
 #endif

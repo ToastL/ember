@@ -2,11 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "backend.h"
+#include "renderer.h"
 #include "input.h"
-#include "protocol.h"
+#include "wayland/protocols.h"
 
 // Callback when DRM FD is ready (Page Flip Complete)
 static int on_drm_event(int fd, uint32_t mask, void *data) {
+    (void)fd; (void)mask;
     struct ember_server *server = data;
     handle_drm_event(server);
     return 1;
@@ -31,15 +33,24 @@ int main(int argc, char *argv[]) {
     server.wl_event_loop = wl_display_get_event_loop(server.wl_display);
     wl_list_init(&server.surfaces);
 
-    if (init_graphics(&server) < 0) return 1;
+    // 1. Initialize Backend (DRM -> GBM -> EGL)
+    if (init_drm(&server) < 0) return 1;
+    
+    // 2. Initialize Output (Modesetting + Renderer + wl_output)
     if (init_output(&server) < 0) return 1;
     
-    // Initialize cursor at center of screen
-    server.cursor_x = server.mode.hdisplay / 2.0;
-    server.cursor_y = server.mode.vdisplay / 2.0;
-    
+    // 3. Initialize Input (libinput + cursor)
     if (init_input(&server) < 0) return 1;
+    
+    // 4. Initialize Wayland Globals (Compositor, Shell, Seat, etc.)
     if (init_wayland_globals(&server) < 0) return 1;
+    
+    // Note: init_seat is separate? pure protocol init
+    // Let's check init_wayland_globals implementation in wayland/compositor.c
+    // It calls init_shm, init_shell, init_ddm.
+    // It does NOT call init_seat. We must call it manually or add it to init_wayland_globals.
+    // I will call it manually here to be safe and explicit.
+    if (init_seat(&server) < 0) return 1;
 
     // Render one frame immediately to turn the screen on (Modeset)
     render_frame(&server);

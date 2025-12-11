@@ -1,7 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <wayland-server.h>
 #include "ember.h"
-#include "protocol.h"
+#include "wayland/protocols.h"
 
 static void surface_destroy(struct wl_client *client, struct wl_resource *resource) {
     (void)client;
@@ -147,6 +148,7 @@ static void compositor_bind(struct wl_client *client, void *data, uint32_t versi
 
 }
 
+// This function implementation stays here for now
 int init_wayland_globals(struct ember_server *server) {
     server->compositor = wl_global_create(server->wl_display, &wl_compositor_interface, 4, server, compositor_bind);
     if (!server->compositor) {

@@ -12,7 +12,6 @@ project('ember', 'c',
 cc = meson.get_compiler('c')
 
 # Dependencies
-# Dependencies
 wayland_server_dep = dependency('wayland-server')
 libdrm_dep = dependency('libdrm')
 gbm_dep = dependency('gbm')
@@ -38,7 +37,6 @@ wayland_scanner_header = generator(
 )
 
 # Protocols
-udev = meson.get_compiler('c').find_library('udev')
 wl_protocol_dir = wayland_protos_dep.get_variable(pkgconfig: 'pkgdatadir')
 xdg_shell_xml = wl_protocol_dir / 'stable/xdg-shell/xdg-shell.xml'
 
@@ -48,9 +46,17 @@ xdg_shell_h = wayland_scanner_header.process(xdg_shell_xml)
 # Source files
 src_files = files(
   'src/main.c',
+  # Backend
   'src/backend/drm.c',
-  'src/input/seat.c',
+  'src/backend/egl.c',
+  'src/backend/renderer.c',
+  'src/backend/output.c',
+  # Input
+  'src/input/input.c',
+  'src/input/cursor.c',
+  # Wayland Protocols
   'src/wayland/compositor.c',
+  'src/wayland/seat.c',
   'src/wayland/shm.c',
   'src/wayland/shell.c',
   'src/wayland/data_device.c'
@@ -60,7 +66,10 @@ src_files = files(
 executable(
   'ember',
   [src_files, xdg_shell_c, xdg_shell_h],
-  include_directories: include_directories('include'),
+  include_directories: [
+      include_directories('include'),
+      include_directories('include/wayland')
+  ],
   dependencies: [
     wayland_server_dep,
     libdrm_dep,
