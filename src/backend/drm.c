@@ -6,7 +6,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include "backend.h"
+
+#ifndef GL_BGRA_EXT
+#define GL_BGRA_EXT 0x80E1
+#endif
 
 // Simple helper to open the first available DRM card
 static int open_drm_device(void) {
@@ -76,6 +81,22 @@ int init_graphics(struct ember_server *server) {
 
 // --- wl_output implementation ---
 
+static void output_bind(struct wl_client *client, void *data, uint32_t version, uint32_t id) {
+    struct ember_server *server = data;
+    struct wl_resource *resource = wl_resource_create(client, &wl_output_interface, version, id);
+    wl_list_insert(&server->output_resources, wl_resource_get_link(resource));
+    
+    // Send Geometry (0,0, physical size 0x0, subpixel unknown, make, model, transform default)
+    wl_output_send_geometry(resource, 0, 0, 0, 0, 0, "ToastOS", "Ember Display", WL_OUTPUT_TRANSFORM_NORMAL);
+    
+    // Send Mode (flags: current | preferred)
+    uint32_t flags = WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED;
+    wl_output_send_mode(resource, flags, server->mode.hdisplay, server->mode.vdisplay, server->mode.vrefresh * 1000);
+    
+    // Send Scale (1) and Done
+    if (version >= 2) wl_output_send_scale(resource, 1);
+    if (version >= 2) wl_output_send_done(resource);
+}
 
 int init_output(struct ember_server *server) {
     drmModeRes *resources = drmModeGetResources(server->drm_fd);
@@ -139,9 +160,17 @@ int init_output(struct ember_server *server) {
     }
     printf("Initialized Output (CRTC ID: %d)\n", server->crtc->crtc_id);
 
+    printf("Initialized Output (CRTC ID: %d)\n", server->crtc->crtc_id);
+
     // Initialize Global
     wl_list_init(&server->output_resources);
-    // wl_global_create(server->wl_display, &wl_output_interface, 3, server, output_bind);
+    
+    server->output_global = wl_global_create(server->wl_display, &wl_output_interface, 3, server, output_bind);
+    if (!server->output_global) {
+        fprintf(stderr, "Failed to create wl_output global\n");
+        return -1;
+    }
+    printf("Initialized Wayland Globals (Output)\n");
 
     return 0;
 }
@@ -172,24 +201,40 @@ static void page_flip_handler(int fd, unsigned int frame,
 // Simple Shaders
 static const char *vert_shader_text =
     "attribute vec2 position;\n"
+    "attribute vec2 texcoord;\n"
+    "varying vec2 v_texcoord;\n"
     "void main() {\n"
     "    gl_Position = vec4(position, 0.0, 1.0);\n"
+    "    v_texcoord = texcoord;\n"
     "}\n";
 
 static const char *frag_shader_text =
     "precision mediump float;\n"
+    "varying vec2 v_texcoord;\n"
+    "uniform sampler2D tex;\n"
     "void main() {\n"
-    "    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);\n"
+    "    gl_FragColor = texture2D(tex, v_texcoord);\n"
     "}\n";
 
 static GLuint program;
 static GLuint pos_loc;
+static GLuint texcoord_loc;
+static GLuint tex_loc;
 
 static GLuint create_shader(struct ember_server *server, const char *source, GLenum type) {
     (void)server;
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, NULL);
     glCompileShader(shader);
+    
+    // Check compile status (optional for now, but good practice)
+    GLint compiled;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        char infoLog[512];
+        glGetShaderInfoLog(shader, 512, NULL, infoLog);
+        fprintf(stderr, "Shader compilation failed: %s\n", infoLog);
+    }
     return shader;
 }
 
@@ -203,6 +248,11 @@ static void init_shaders(struct ember_server *server) {
     glLinkProgram(program);
     
     pos_loc = glGetAttribLocation(program, "position");
+    texcoord_loc = glGetAttribLocation(program, "texcoord");
+    tex_loc = glGetUniformLocation(program, "tex");
+    
+    glUseProgram(program);
+    glUniform1i(tex_loc, 0); // Bind sampler to texture unit 0
 }
 
 void render_frame(struct ember_server *server) {
@@ -212,16 +262,136 @@ void render_frame(struct ember_server *server) {
         initialized = 1;
     }
 
-    // 1. Draw Background (Pulsing Blue)
-    static float color = 0.0f;
-    static int direction = 1;
-    color += 0.01f * direction;
-    if (color >= 1.0f) direction = -1;
-    if (color <= 0.0f) direction = 1;
-    glClearColor(0.0, 0.0, color, 1.0);
+    // 1. Draw Background (Dark Grey)
+    glClearColor(0.1, 0.1, 0.1, 1.0);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    // Enable Blending for transparency
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // 2. Render Surfaces
+    struct ember_surface *surface;
+    wl_list_for_each_reverse(surface, &server->surfaces, link) {
+        if (!surface->buffer) {
+            continue;
+        }
+
+        struct wl_shm_buffer *shm_buffer = wl_shm_buffer_get(surface->buffer);
+        if (!shm_buffer) {
+             continue;
+        }
+
+        int32_t width = wl_shm_buffer_get_width(shm_buffer);
+        int32_t height = wl_shm_buffer_get_height(shm_buffer);
+        void *data = wl_shm_buffer_get_data(shm_buffer);
+
+        // Upload Texture if needed (Simple: Upload every frame for now for correctness)
+        // TODO: Optimize using damage tracking
+        if (!surface->texture_id) {
+            glGenTextures(1, &surface->texture_id);
+        }
+        
+        glBindTexture(GL_TEXTURE_2D, surface->texture_id);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
+        // Wayland uses ARGB8888, OpenGL expects BGRA or we swizzle.
+        // For simplicity, let's assume WL_SHM_FORMAT_ARGB8888 maps roughly to GL_BGRA_EXT
+        // Note: Check extension support or just use GL_RGBA and hope colors are flipped (RB swapped).
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_BGRA_EXT, width, height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, data);
+        
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            printf("GL Error uploading texture: 0x%x\n", err);
+        }
+
+        // Draw Quad (Client coordinates to NDC)
+        // Normalized Device Coordinates: -1.0 to 1.0
+        // We need a projection matrix, but for now let's just draw Fullscreen or a fixed quad.
+        // TODO: Implement proper coordinate projection.
+        // Temporary: Draw covering 50% of screen center
+        GLfloat vVertices[] = { 
+             -0.5f,  0.5f, 0.0f,  // Top Left
+             -0.5f, -0.5f, 0.0f,  // Bottom Left
+              0.5f, -0.5f, 0.0f,  // Bottom Right
+              0.5f,  0.5f, 0.0f   // Top Right
+        };
+        
+        // Texture Coords (Flip Y because Wayland is Top-Left, GL is Bottom-Left)
+        GLfloat vTexCoords[] = {
+            0.0f, 0.0f,
+            0.0f, 1.0f,
+            1.0f, 1.0f,
+            1.0f, 0.0f
+        };
+        
+        // We need an element buffer or draw arrays (Triangle Fan for Quad)
+        
+        // Vertex Attrib (Position)
+        glVertexAttribPointer(pos_loc, 3, GL_FLOAT, GL_FALSE, 0, vVertices);
+        glEnableVertexAttribArray(pos_loc);
+
+        // Texture Coords
+        glVertexAttribPointer(texcoord_loc, 2, GL_FLOAT, GL_FALSE, 0, vTexCoords);
+        glEnableVertexAttribArray(texcoord_loc);
+        
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    }
     
-    // 2. Swap Buffers (EGL -> GBM)
+    // 3. Draw Cursor (simple white square)
+    {        
+        // Cursor size in pixels (larger for 4K)
+        float cursor_size = 32.0f;
+        float cx = server->cursor_x;
+        float cy = server->cursor_y;
+        
+        // Convert to normalized device coordinates (-1 to 1)
+        float screen_w = (float)server->mode.hdisplay;
+        float screen_h = (float)server->mode.vdisplay;
+        
+        float x0 = (cx / screen_w) * 2.0f - 1.0f;
+        float y0 = 1.0f - (cy / screen_h) * 2.0f;  // Flip Y
+        float x1 = ((cx + cursor_size) / screen_w) * 2.0f - 1.0f;
+        float y1 = 1.0f - ((cy + cursor_size) / screen_h) * 2.0f;
+        
+        GLfloat cursor_verts[] = {
+            x0, y0, 0.0f,
+            x0, y1, 0.0f,
+            x1, y1, 0.0f,
+            x1, y0, 0.0f,
+        };
+        
+        GLfloat cursor_tex[] = {
+            0.0f, 0.0f,
+            0.0f, 1.0f,
+            1.0f, 1.0f,
+            1.0f, 0.0f
+        };
+        
+        // Create a small white texture for cursor
+        static GLuint cursor_tex_id = 0;
+        if (!cursor_tex_id) {
+            glGenTextures(1, &cursor_tex_id);
+            glBindTexture(GL_TEXTURE_2D, cursor_tex_id);
+            unsigned char white[] = {255, 255, 255, 255};
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
+        
+        glBindTexture(GL_TEXTURE_2D, cursor_tex_id);
+        
+        // Ensure attribs are enabled
+        glEnableVertexAttribArray(pos_loc);
+        glEnableVertexAttribArray(texcoord_loc);
+        
+        glVertexAttribPointer(pos_loc, 3, GL_FLOAT, GL_FALSE, 0, cursor_verts);
+        glVertexAttribPointer(texcoord_loc, 2, GL_FLOAT, GL_FALSE, 0, cursor_tex);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    }
+    
+    // 4. Swap Buffers (EGL -> GBM)
     eglSwapBuffers(server->egl_display, server->egl_surface);
 
     // 3. Get the underlying buffer object (GBM BO)

@@ -8,10 +8,9 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
-#include <stdbool.h>
-
-#include <libudev.h>
 #include <libinput.h>
+#include <libudev.h>
+// #include "protocol.h" // Removed to avoid circular dependency. init_wayland_globals is declared in protocol.h or main.c needs to include protocol.h
 
 // Forward declaration
 struct ember_server;
@@ -19,6 +18,14 @@ struct ember_server;
 struct ember_surface {
     struct wl_resource *resource;
     struct wl_list link; // Link to server->surfaces
+    
+    // Rendering State
+    struct wl_resource *buffer; // The attached wl_buffer
+    int32_t pos_x, pos_y;       // Window position
+    
+    // GL State
+    GLuint texture_id;
+    EGLImageKHR egl_image;
     
     // Double Buffering State
     struct gbm_bo *previous_bo;
@@ -35,6 +42,13 @@ struct ember_server {
     
     // Wayland Globals
     struct wl_global *compositor;
+    struct wl_list surfaces; // Added: List of all surfaces
+    struct wl_global *shm_global;
+    struct wl_global *compositor_global; 
+    struct wl_global *output_global;
+    struct wl_global *seat_global;
+    struct wl_global *xdg_shell_global; // Added
+    struct wl_global *ddm_global;  // wl_data_device_manager
 
     // DRM/GBM/EGL State
     int drm_fd;
@@ -57,6 +71,9 @@ struct ember_server {
     // Client Resources (for broadcasting events)
     struct wl_list seat_resources;   // wl_seat clients
     struct wl_list output_resources; // wl_output clients
+    
+    // Cursor State
+    double cursor_x, cursor_y;
 };
 
 #endif

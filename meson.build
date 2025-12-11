@@ -12,6 +12,7 @@ project('ember', 'c',
 cc = meson.get_compiler('c')
 
 # Dependencies
+# Dependencies
 wayland_server_dep = dependency('wayland-server')
 libdrm_dep = dependency('libdrm')
 gbm_dep = dependency('gbm')
@@ -19,18 +20,46 @@ egl_dep = dependency('egl')
 glesv2_dep = dependency('glesv2')
 libinput_dep = dependency('libinput')
 libudev_dep = dependency('libudev')
+wayland_protos_dep = dependency('wayland-protocols')
+xkbcommon_dep = dependency('xkbcommon')
+
+# Wayland Scanner
+wayland_scanner = find_program('wayland-scanner')
+wayland_scanner_server = generator(
+    wayland_scanner,
+    output: '@BASENAME@-protocol.c',
+    arguments: ['private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+wayland_scanner_header = generator(
+    wayland_scanner,
+    output: '@BASENAME@-protocol.h',
+    arguments: ['server-header', '@INPUT@', '@OUTPUT@'],
+)
+
+# Protocols
+udev = meson.get_compiler('c').find_library('udev')
+wl_protocol_dir = wayland_protos_dep.get_variable(pkgconfig: 'pkgdatadir')
+xdg_shell_xml = wl_protocol_dir / 'stable/xdg-shell/xdg-shell.xml'
+
+xdg_shell_c = wayland_scanner_server.process(xdg_shell_xml)
+xdg_shell_h = wayland_scanner_header.process(xdg_shell_xml)
 
 # Source files
 src_files = files(
   'src/main.c',
   'src/backend/drm.c',
-  'src/input/seat.c'
+  'src/input/seat.c',
+  'src/wayland/compositor.c',
+  'src/wayland/shm.c',
+  'src/wayland/shell.c',
+  'src/wayland/data_device.c'
 )
 
 # Executable
 executable(
   'ember',
-  src_files,
+  [src_files, xdg_shell_c, xdg_shell_h],
   include_directories: include_directories('include'),
   dependencies: [
     wayland_server_dep,
@@ -40,6 +69,7 @@ executable(
     glesv2_dep,
     libinput_dep,
     libudev_dep,
+    xkbcommon_dep,
   ],
   install: true,
 )

@@ -1,9 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
-#include "ember.h"
 #include "backend.h"
 #include "input.h"
+#include "protocol.h"
 
 // Callback when DRM FD is ready (Page Flip Complete)
 static int on_drm_event(int fd, uint32_t mask, void *data) {
@@ -13,19 +13,33 @@ static int on_drm_event(int fd, uint32_t mask, void *data) {
 }
 
 int main(int argc, char *argv[]) {
+    (void)argc; (void)argv;
     printf("Starting Ember Compositor...\n");
     struct ember_server server = {0};
     
     // Ensure we see output immediately
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    
+    // Set XDG_RUNTIME_DIR if not set (needed for openvt)
+    if (!getenv("XDG_RUNTIME_DIR")) {
+        setenv("XDG_RUNTIME_DIR", "/tmp", 1);
+        printf("Set XDG_RUNTIME_DIR=/tmp\n");
+    }
 
     server.wl_display = wl_display_create();
     server.wl_event_loop = wl_display_get_event_loop(server.wl_display);
+    wl_list_init(&server.surfaces);
 
     if (init_graphics(&server) < 0) return 1;
     if (init_output(&server) < 0) return 1;
+    
+    // Initialize cursor at center of screen
+    server.cursor_x = server.mode.hdisplay / 2.0;
+    server.cursor_y = server.mode.vdisplay / 2.0;
+    
     if (init_input(&server) < 0) return 1;
+    if (init_wayland_globals(&server) < 0) return 1;
 
     // Render one frame immediately to turn the screen on (Modeset)
     render_frame(&server);
