@@ -1,0 +1,23 @@
+# Build Directory
+build/
+subprojects/
+
+# Object files
+*.o
+*.a
+*.so
+*.p/
+
+# Editor/IDE
+.vscode/
+.idea/
+.DS_Store
+*~
+*.swp
+*.swo
+
+# Tools
+compile_commands.json
+.cache/
+perf.data
+perf.data.old
