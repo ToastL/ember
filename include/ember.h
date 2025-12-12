@@ -80,10 +80,13 @@ struct ember_server {
 
     // Input State
     struct ember_cursor cursor;
+    struct ember_surface *focused_surface; // Surface with keyboard/pointer focus
 
     // Client Resources (for broadcasting events)
     struct wl_list seat_resources;
     struct wl_list output_resources;
+    struct wl_list keyboard_resources; // Active wl_keyboard resources
+    struct wl_list pointer_resources;  // Active wl_pointer resources
 };
 
 #endif

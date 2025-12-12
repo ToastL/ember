@@ -57,16 +57,26 @@ static const struct wl_keyboard_interface keyboard_interface = {
 // --- wl_seat implementation ---
 
 static void seat_get_pointer(struct wl_client *client, struct wl_resource *resource, uint32_t id) {
+    struct ember_server *server = wl_resource_get_user_data(resource);
     struct wl_resource *pointer_resource = wl_resource_create(client, &wl_pointer_interface, wl_resource_get_version(resource), id);
-    wl_resource_set_implementation(pointer_resource, &pointer_interface, NULL, NULL);
+    wl_resource_set_implementation(pointer_resource, &pointer_interface, server, NULL);
 
+    // Add to server's pointer list
+    wl_list_insert(&server->pointer_resources, wl_resource_get_link(pointer_resource));
 }
 
 static void seat_get_keyboard(struct wl_client *client, struct wl_resource *resource, uint32_t id) {
+    struct ember_server *server = wl_resource_get_user_data(resource);
     struct wl_resource *keyboard_resource = wl_resource_create(client, &wl_keyboard_interface, wl_resource_get_version(resource), id);
-    wl_resource_set_implementation(keyboard_resource, &keyboard_interface, NULL, NULL);
+    wl_resource_set_implementation(keyboard_resource, &keyboard_interface, server, NULL);
+
+    // Add to server's keyboard list
+    wl_list_insert(&server->keyboard_resources, wl_resource_get_link(keyboard_resource));
 
     // Mandatory: Send repeat info (rate/delay)
+    if (wl_resource_get_version(keyboard_resource) >= 4) {
+        wl_keyboard_send_repeat_info(keyboard_resource, 25, 600);
+    }
     if (wl_resource_get_version(keyboard_resource) >= 4) {
         wl_keyboard_send_repeat_info(keyboard_resource, 25, 600);
     }
@@ -131,6 +141,8 @@ static void seat_bind(struct wl_client *client, void *data, uint32_t version, ui
 
 int init_seat(struct ember_server *server) {
     wl_list_init(&server->seat_resources);
+    wl_list_init(&server->keyboard_resources);
+    wl_list_init(&server->pointer_resources);
     server->seat_global = wl_global_create(server->wl_display, &wl_seat_interface, 5, server, seat_bind);
     if (!server->seat_global) {
         fprintf(stderr, "Failed to create wl_seat global\n");

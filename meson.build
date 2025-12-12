@@ -54,6 +54,7 @@ src_files = files(
   # Input
   'src/input/input.c',
   'src/input/cursor.c',
+  'src/input/dispatch.c',
   # Wayland Protocols
   'src/wayland/compositor.c',
   'src/wayland/seat.c',

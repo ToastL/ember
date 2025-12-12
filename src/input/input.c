@@ -30,11 +30,20 @@ static const struct libinput_interface interface_ops = {
 
 static void handle_keyboard_key(struct ember_server *server, struct libinput_event_keyboard *k) {
     uint32_t key = libinput_event_keyboard_get_key(k);
-    if (libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED) {
-        if (key == KEY_ESC) {
-            wl_display_terminate(server->wl_display);
-        }
+    uint32_t state = libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED ? 
+                     WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
+    
+    // ESC to quit compositor
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED && key == KEY_ESC) {
+        wl_display_terminate(server->wl_display);
+        return;
     }
+    
+    // Auto-focus first surface if needed
+    update_focus(server);
+    
+    // Dispatch to focused client
+    dispatch_keyboard_key(server, key, state);
 }
 
 static void handle_pointer_motion(struct ember_server *server, struct libinput_event_pointer *p) {
@@ -50,6 +59,20 @@ static void handle_pointer_motion(struct ember_server *server, struct libinput_e
     if (server->cursor.y < 0) server->cursor.y = 0;
     if (server->cursor.x > server->mode.hdisplay) server->cursor.x = server->mode.hdisplay;
     if (server->cursor.y > server->mode.vdisplay) server->cursor.y = server->mode.vdisplay;
+    
+    // Dispatch to focused client
+    dispatch_pointer_motion(server, server->cursor.x, server->cursor.y);
+}
+
+static void handle_pointer_button(struct ember_server *server, struct libinput_event_pointer *p) {
+    uint32_t button = libinput_event_pointer_get_button(p);
+    uint32_t state = libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED ?
+                     WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED;
+    
+    // Auto-focus on click
+    update_focus(server);
+    
+    dispatch_pointer_button(server, button, state);
 }
 
 // Internal processing
@@ -69,8 +92,12 @@ static void process_events(struct ember_server *server) {
             struct libinput_event_pointer *p = libinput_event_get_pointer_event(ev);
             server->cursor.x = libinput_event_pointer_get_absolute_x_transformed(p, server->mode.hdisplay);
             server->cursor.y = libinput_event_pointer_get_absolute_y_transformed(p, server->mode.vdisplay);
+            dispatch_pointer_motion(server, server->cursor.x, server->cursor.y);
             break;
         }
+        case LIBINPUT_EVENT_POINTER_BUTTON:
+            handle_pointer_button(server, libinput_event_get_pointer_event(ev));
+            break;
         default:
             break;
         }
